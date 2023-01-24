@@ -40,7 +40,7 @@ class POD:
             self.nx = config["nx"]
             self.ny = config["ny"]
             self.nz = config.setdefault('nz', 1)
-            self.fieldnames = list(config["fieldnames"])
+            self.fieldnames = tuple(config["fieldnames"])
             self.use_lateral_fft = config["use_lateral_fft"]
             self.use_svd = config["use_svd"]
             self.subtract_diffusive_profile = list(config.setdefault("subtract_diffusive_profile",list()))
@@ -56,7 +56,7 @@ class POD:
                 self.ny = f.attrs["ny"]
                 self.nz = f.attrs["nz"]
                 G = f['fieldnames']
-                self.fieldnames = list(G.keys())
+                self.fieldnames = tuple(G.keys())
                 
                 self.use_lateral_fft = bool(f.attrs["use_lateral_fft"])
                 self.use_svd = bool(f.attrs["use_svd"])
