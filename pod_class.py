@@ -136,7 +136,7 @@ class POD:
 
         #Sort modes according to energy & thermal variance
         eigen_values, idx_sort = torch.sort(eigen_values,descending=True)
-        time_coefficients = time_coefficients[:,idx_sort]
+        time_coefficients = time_coefficients[:,idx_sort].real
         
         # Project data on eigenspace 
         spatial_modes = torch.matmul(data.t().conj(),time_coefficients)
@@ -190,7 +190,7 @@ class POD:
             f.attrs['nfields'] = self.nfields
 
     #----------------------------------------------------------
-    def get_spatial_modes(self,nmodes=None):
+    def get_spatial_modes(self,nmodes=None,undo_fft=False):
         """
         Returns spatial modes.
         INPUT:
@@ -202,9 +202,17 @@ class POD:
             if nmodes is not None:
                 spatial_modes = np.array(f["spatial_modes"][:,:nmodes])
             else:
+                nmodes = pod.nt
                 spatial_modes = np.array(f["spatial_modes"])
+                
+        spatial_modes = torch.from_numpy(spatial_modes)
+                
+        if undo_fft and self.use_lateral_fft:
+            spatial_modes = spatial_modes.t().reshape(nmodes,self.nfields,self.nz,self.ny,self.nx)
+            spatial_modes = self.ifft(spatial_modes,dim=self.fft_dim)
+            spatial_modes = spatial_modes.reshape(nmodes,-1).t().to(_DTYPE)
             
-        return torch.from_numpy(spatial_modes).to(_DTYPE)
+        return spatial_modes
     
     #----------------------------------------------------------
     def get_mean(self):
@@ -238,42 +246,56 @@ class POD:
         return torch.from_numpy(time_coefficients).to(_DTYPE)
 
     #----------------------------------------------------------
-    def reconstruct(self,x,spatial_modes=None,mean=None):
+    def get_eigen_values(self):
+        """
+        Returns eigen values of POD covariance matrix.
+        RETURN 
+            eigen_values - eigen values
+        """
+        with h5py.File(self.savefile, "r") as f:    
+            eigen_values = np.array(f["eigen_values"])
+            
+        return torch.from_numpy(eigen_values).to(_DTYPE)
+    
+    #----------------------------------------------------------
+    def reconstruct(self,x,spatial_modes=None,mean=None,add_mean=True):
         """
         Reconstructs the physical fields from the POD time coefficients x and spatial modes (either loaded from pod_filepath or taken from arg)
         INPUT:
             x                 - time coefficients. Shape: (nt, nmodes)
             spatial_modes     - spatial modes, if None: read from hdf5 file
             mean              - time mean fields, if None: read from hdf5 file
+            add_mean          - whether to add time mean field to reconstructed data (default: True)
         RETURN:
             reconstructed_fields - physical fields, reconstructed from POD time coefficients & spatial modes, shape (nt,nfields,nz,ny,nx)
         """
 
         nt, nmodes = x.shape
 
-        if mean is None:
-            with h5py.File(self.savefile, "r") as f:
-                mean = np.array(f["mean"])
-                mean = torch.from_numpy(mean).to(_DTYPE)
-
         if spatial_modes is None:
-            with h5py.File(self.savefile, "r") as f:            
-                spatial_modes = np.array(f["spatial_modes"][:,:nmodes])
-                spatial_modes = torch.from_numpy(spatial_modes).to(_DTYPE)
+            spatial_modes = self.get_spatial_modes(nmodes=nmodes)
 
         #Reconstruct from POD
         #---------------------
-        reconstructed_data = x@spatial_modes[:,:nmodes].t().conj()                                # output shape (nt,nfields*nz*ny*nx)
+        reconstructed_data = x.to(spatial_modes.dtype)@spatial_modes[:,:nmodes].t().conj()                                # output shape (nt,nfields*nz*ny*nx)
+        reconstructed_data = reconstructed_data.reshape(nt,self.nfields,self.nz,self.ny,self.nx)                          # output shape (nt,nfields,nz,ny,nx)
 
         if self.use_lateral_fft:
-            reconstructed_data = self.ifft(reconstructed_data.reshape(nt,self.nfields,self.nz,self.ny,self.nx),dim=self.fft_dim).real  # reverse FFT pre-processing, output shape (nt,nfields,nz,ny,nx)
-        else:
-            reconstructed_data = reconstructed_data.reshape(nt,self.nfields,self.nz,self.ny,self.nx).real # output shape (nt,nfields,nz,ny,nx)
-        reconstructed_data += mean.reshape(1,self.nfields,self.nz,self.ny,self.nx)                             # add time mean fields
+            reconstructed_data = self.ifft(reconstructed_data, dim=self.fft_dim) # reverse FFT pre-processing, output shape (nt,nfields,nz,ny,nx)
         
-        for ifield,name in enumerate(self.fieldnames):
-            if name in self.subtract_diffusive_profile:
-                reconstructed_data[:,ifield] += self.diffusive_profile.unsqueeze(0)                            # add diffusive profile for temperature field
+        reconstructed_data = reconstructed_data.real.to(_DTYPE)     
+        
+         # add time mean (& diffusive profiles)
+        if add_mean:
+            
+            if mean is None:
+                mean = self.get_mean().reshape(1,self.nfields,self.nz,self.ny,self.nx)  
+                
+            reconstructed_data += mean                                              
+        
+            for ifield,name in enumerate(self.fieldnames):
+                if name in self.subtract_diffusive_profile:
+                    reconstructed_data[:,ifield] += self.diffusive_profile.unsqueeze(0)                        
                 
         reconstructed_data = torch.permute(reconstructed_data,(1,0,2,3,4))                                     # output shape (nfields,nt,nz,ny,nx)
 
