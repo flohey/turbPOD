@@ -39,11 +39,11 @@ class POD:
             self.aspect = config["aspect"]
             self.nx = config["nx"]
             self.ny = config["ny"]
-            self.nz = config.setdefault('nz', 1)
-            self.fieldnames = tuple(config["fieldnames"])
+            self.nz = config.get('nz', 1)
+            self.fieldnames = list(config["fieldnames"])
             self.use_lateral_fft = config["use_lateral_fft"]
             self.use_svd = config["use_svd"]
-            self.subtract_diffusive_profile = list(config.setdefault("subtract_diffusive_profile",list()))
+            self.subtract_diffusive_profile = list(config.get("subtract_diffusive_profile",list()))
     
     def init_from_file(self,savefile):
             
@@ -56,7 +56,7 @@ class POD:
                 self.ny = f.attrs["ny"]
                 self.nz = f.attrs["nz"]
                 G = f['fieldnames']
-                self.fieldnames = tuple(G.keys())
+                self.fieldnames = list(G.keys())
                 
                 self.use_lateral_fft = bool(f.attrs["use_lateral_fft"])
                 self.use_svd = bool(f.attrs["use_svd"])
@@ -87,18 +87,27 @@ class POD:
             self.diffusive_profile = 1-Y.reshape(self.nz,self.ny,self.nx)
             
     #----------------------------------------------------------
-    def read_nek_data(self,datapath=None):
+    def read_nek_data(self,datapath=None,nt=None):
         """
-        Read interpolated data from Nek5000 run.
+        Read interpolated data from Nek5000 run. Binary files for each field and time step.
+        INPUT:
+            datapath - path to interpolated Nek5000 fields.
+            nt       - no. time steps to import
+
+        RETURN:
+            x  - DNS fields, shape (nt,nfields,nz,ny,nx)
         """
         
         if datapath is None:
             assert self.datapath is not None, "Error no datapath was provided."
             datapath = self.datapath
             
-        x = torch.empty((self.nt,self.nfields,self.nz,self.ny,self.nx))
+        if nt is None:
+            nt = self.nt
+            
+        x = torch.empty((nt,self.nfields,self.nz,self.ny,self.nx))
         for ifield, name in enumerate(self.fieldnames):
-            for ii,it in enumerate(range(1,self.nt+1)):
+            for ii,it in enumerate(range(1,nt+1)):
                 x[ii,ifield]  = torch.tensor(np.fromfile(datapath+name+'.dat_{:05d}'.format(it)).reshape(self.nz,self.ny,self.nx)).to(_DTYPE)
         
         return x
@@ -113,7 +122,7 @@ class POD:
         #---------------------------
         assert data.shape == (self.nt,self.nfields,self.nz,self.ny,self.nx), "Error: data has an incorrect shape. Please provide (nt,nfields,nz,ny,nx): " +f"(({self.nt},{self.nfields},{self.nz},{self.ny},{self.nx}))"
         for ifield, name in enumerate(self.fieldnames):
-            if name == self.subtract_diffusive_profile:
+            if name in self.subtract_diffusive_profile:
                 data[:,ifield] = data[:,ifield] - self.diffusive_profile.unsqueeze(0)
         
         # Subtract time mean <>_t
@@ -136,15 +145,15 @@ class POD:
 
         #Sort modes according to energy & thermal variance
         eigen_values, idx_sort = torch.sort(eigen_values,descending=True)
-        time_coefficients = time_coefficients[:,idx_sort].real
+        time_coefficients = time_coefficients[:,idx_sort]
         
         # Project data on eigenspace 
         spatial_modes = torch.matmul(data.t().conj(),time_coefficients)
 
         if save:
-            self.save(time_coefficients,spatial_modes,eigen_values,mean)
+            self.save(time_coefficients.real.to(_DTYPE),spatial_modes,eigen_values,mean)
         
-        return time_coefficients, spatial_modes, eigen_values, mean
+        return time_coefficients.real.to(_DTYPE), spatial_modes, eigen_values, mean
 
     #----------------------------------------------------------
     def save(self,
@@ -336,9 +345,9 @@ class POD:
         RETURN:
             nare - normalized average relative error of lta profile
         """
-
-        norm = 2*max(lta_truth)
-        nare =  1/norm*torch.trapz(abs(lta_truth - lta_test), x=self.vertical_coord)   
+        
+        norm = 2*torch.max(lta_truth)
+        nare = 1/norm*torch.trapz(torch.abs(lta_truth - lta_test), x=self.vertical_coord)   
 
         return nare
     
