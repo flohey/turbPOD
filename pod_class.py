@@ -22,6 +22,11 @@ class POD:
         else:
             self.init_from_file(savefile)
             
+        for ii,field_name in enumerate(self.subtract_diffusive_profile):
+            if field_name == "":
+                self.subtract_diffusive_profile.pop(ii)
+                
+        
         self.nfields=len(self.fieldnames)
         self.total_points = int(self.nx*self.ny*self.nz)
         
@@ -116,6 +121,16 @@ class POD:
     def apply(self,data=None,save=False):
         """
         Perform POD on data & save to self.savefile.
+        
+        INPUT:
+            data - flow data, shape (nt,nfields,nz,ny,nx)
+            save - whether to save POD modes and time coefficients to disc
+        
+        RETURN:
+            time_coefficients - POD time coefficients, shape (nt,nmodes)
+            spatial_modes     - POD spatial modes, shape (nfields*nz*ny*nx,nmodes)
+            eigen_values      - eigen values of the snapshot covariance matrix, shape (nmodes,)
+            mean              - time mean of physical fields <.>_t (subtracted before POD is performed), shape (1,nfields,nz,ny,nx)
         """
         
         #Subtract diffusive profiles
@@ -167,12 +182,13 @@ class POD:
         """
         Saves POD modes, time coefficients, singular values & time mean of physical fields.
         
-        time_coefficients - 
-        spatial_modes     -
-        eigen_values      - eigenvalues of the covariance matrix
-        mean              - time mean of physical fields <.>_t
-        compression       - hdf5 compression algorithm
-        compression_opts  - hdf5 compression level
+        INPUT:
+            time_coefficients - POD time coefficients, shape (nt,nmodes)
+            spatial_modes     - POD spatial modes, shape (nfields*nz*ny*nx,nmodes)
+            eigen_values      - eigenvalues of the covariance matrix
+            mean              - time mean of physical fields <.>_t
+            compression       - hdf5 compression algorithm
+            compression_opts  - hdf5 compression level
         """
         
         with h5py.File(self.savefile, 'a') as f:
@@ -182,8 +198,9 @@ class POD:
             f.create_dataset('spatial_modes', data=spatial_modes, compression=compression, compression_opts=compression_opts)
             
             G = f.create_group('subtract_diffusive_profile')
-            for name in self.subtract_diffusive_profile:
-                G.create_group(name)
+            if len(self.subtract_diffusive_profile) > 0:
+                for name in self.subtract_diffusive_profile:
+                    G.create_group(name)
             
             G = f.create_group('fieldnames')
             for name in self.fieldnames:
@@ -205,13 +222,13 @@ class POD:
         INPUT:
             nmodes - no. spatial modes (if None, use all available)
         RETURN 
-            spatial_modes - POD spatial modes
+            spatial_modes     - POD spatial modes, shape (nmodes,nfields*nz*ny*nx)
         """
         with h5py.File(self.savefile, "r") as f:    
             if nmodes is not None:
                 spatial_modes = np.array(f["spatial_modes"][:,:nmodes])
             else:
-                nmodes = pod.nt
+                nmodes = self.nt
                 spatial_modes = np.array(f["spatial_modes"])
                 
         spatial_modes = torch.from_numpy(spatial_modes)
@@ -227,8 +244,9 @@ class POD:
     def get_mean(self):
         """
         Returns time mean <.>_t.
-        RETURN 
-            mean - time mean
+        
+        RETURN :
+            mean - time mean of physical fields <.>_t (subtracted before POD is performed), shape (1,nfields,nz,ny,nx)
         """
         with h5py.File(self.savefile, "r") as f:    
             mean = np.array(f["mean"])
@@ -242,7 +260,7 @@ class POD:
         INPUT:
             nmodes - no. modes (if None, use all available)
         RETURN 
-            time_coefficients - POD time coefficients
+            time_coefficients - POD time coefficients, shape (it_end-it_start,nmodes)
         """
         if it_end is None:
             it_end = self.nt
@@ -272,15 +290,15 @@ class POD:
         Reconstructs the physical fields from the POD time coefficients x and spatial modes (either loaded from pod_filepath or taken from arg)
         INPUT:
             x                 - time coefficients. Shape: (nt, nmodes)
-            spatial_modes     - spatial modes, if None: read from hdf5 file
-            mean              - time mean fields, if None: read from hdf5 file
+            spatial_modes     - POD spatial modes, shape (nmodes,nfields*nz*ny*nx), if None: read from hdf5 file
+            mean              - time mean of physical fields <.>_t (subtracted before POD is performed), shape (1,nfields,nz,ny,nx), if None: read from save file
             add_mean          - whether to add time mean field to reconstructed data (default: True)
         RETURN:
             reconstructed_fields - physical fields, reconstructed from POD time coefficients & spatial modes, shape (nt,nfields,nz,ny,nx)
         """
 
         nt, nmodes = x.shape
-
+        
         if spatial_modes is None:
             spatial_modes = self.get_spatial_modes(nmodes=nmodes)
 
@@ -301,12 +319,12 @@ class POD:
                 mean = self.get_mean().reshape(1,self.nfields,self.nz,self.ny,self.nx)  
                 
             reconstructed_data += mean                                              
-        
+            
             for ifield,name in enumerate(self.fieldnames):
                 if name in self.subtract_diffusive_profile:
-                    reconstructed_data[:,ifield] += self.diffusive_profile.unsqueeze(0)                        
+                    reconstructed_data[:,ifield] += self.diffusive_profile.reshape(1,self.nz,self.ny,self.nx)
                 
-        reconstructed_data = torch.permute(reconstructed_data,(1,0,2,3,4))                                     # output shape (nfields,nt,nz,ny,nx)
+        reconstructed_data = torch.permute(reconstructed_data,(1,0,2,3,4))            # output shape (nfields,nt,nz,ny,nx)
 
         return reconstructed_data
     
@@ -345,7 +363,7 @@ class POD:
         RETURN:
             nare - normalized average relative error of lta profile
         """
-        
+
         norm = 2*torch.max(lta_truth)
         nare = 1/norm*torch.trapz(torch.abs(lta_truth - lta_test), x=self.vertical_coord)   
 

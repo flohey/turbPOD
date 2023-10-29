@@ -5,7 +5,9 @@ import yaml
 import os
 import sys
 
-from pod_class import POD
+sys.path.append(os.getcwd()+"/../../")
+from pod_class import POD, _DTYPE
+
 def main(config):
     time_start = time.time()
 
@@ -18,9 +20,10 @@ def main(config):
     #---------------------
     #2. Import Data
     #---------------------
-    print('Importing data & performing ')
+    print('Importing data & adapting to requirements.')
     t_import1 = time.time()
-    data = pod.read_nek_data()
+    data = torch.from_numpy(np.load(pod.datapath)).to(_DTYPE)    # read from .npy file
+    data = data.reshape(pod.nt,pod.nfields,pod.nz,pod.ny,pod.nx)  # reshape to fit POD class requirements
     t_import2 = time.time()
     print('Time taken: {:.2f} min'.format((t_import2 - t_import1)/60))
     

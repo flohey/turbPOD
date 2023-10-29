@@ -1,0 +1,19 @@
+nt: 10000     # no. snapshots
+aspect: 4     # RBC aspect ratio
+nx: 128       # no. grid points in horizontal x-direction
+ny: 32        # no. grid points in vertical y-direction
+use_lateral_fft: false           # whether to compute FFT along x-direction before the POD (usually x-dir is periodic)
+use_svd: false                   # whether to use SVD to compute time coefficients & spatial modes (if false: solve EVP of covariance matrix)
+
+fieldnames:  
+  - "temp"
+  - "velx"
+  - "vely"
+
+# whether to subtract linear diffusive profile  1 - z from specified field before performing POD
+# subtract_diffusive_profile: 
+#  - "temp"
+
+datapath: 'data/RBC_A4Ra1e6Pr10_fs.npy'
+savepath: 'pod/'
+savename: 'RBC_A4Ra1e6Pr10_fs_pod.hdf5'
